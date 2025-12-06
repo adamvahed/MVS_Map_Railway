@@ -420,7 +420,7 @@ class ExtractMap extends MV.MVMF.NOTIFICATION
       if (pIAction.pResponse.nResult == 0)
       {
       }
-      else console.log ('ERROR: ' + pIAction.pResponse.nResult);
+      else console.log ('ERROR: ' + pIAction.pResponse.nResult, pIAction.pRequest);
    }
 
    RMPEditType (pRMPObject, pRMPObjectJSON)
@@ -489,16 +489,34 @@ class ExtractMap extends MV.MVMF.NOTIFICATION
       {
          console.log ('ERROR: Creating Object - ' + pIAction.pResponse.nResult);         
 
+         this.#pRMXPending = null;
          this.#bPending = false;
       }
    }
 
-   async WaitForSingleObject ()
+   async WaitForSingleObject (fnCond, interval)
    {
-      let promise = new Promise (resolve)
+      return new Promise ((resolve) => {
+         const check = () => {
+            if (fnCond ())
+            {
+               resolve ();
+            }
+            else
+            {
+               setTimeout (check, interval);
+            }
+         };
+         check ();
+      })
    }
 
-   UpdateRMPObject (pJSONObject, pRMXObject_Parent, mpRemovedNodes)
+   CheckPending ()
+   {
+      return !this.#bPending; // True means stop, False continues
+   }
+
+   async UpdateRMPObject (pJSONObject, pRMXObject_Parent, mpRemovedNodes)
    {
       let bResult;
       let pRMPObject;
@@ -507,7 +525,7 @@ class ExtractMap extends MV.MVMF.NOTIFICATION
       {
          pRMPObject = this.#m_MapRMXItem['73' + '-' + pJSONObject.twObjectIx];
 
-         if (pRMPObject && pRMPObject.twParentIx == pRMXObject_Parent.twObjectIx)
+         if (pRMPObject && pRMPObject.twParentIx == pRMXObject_Parent.twObjectIx && pRMPObject.wClass_Parent == pRMXObject_Parent.wClass_Object)
          {
             this.RMPEditAll (pRMPObject, pJSONObject);
          }
@@ -531,10 +549,10 @@ class ExtractMap extends MV.MVMF.NOTIFICATION
       }
       else
       {
-         let pIAction = pRMPObject_Parent.Request ('RMPOBJECT_OPEN');
+         let pIAction = pRMXObject_Parent.Request ('RMPOBJECT_OPEN');
          let Payload = pIAction.pRequest;
 
-         if (this.RMCopy_CName (pJSONObject, Payload.pName) &&
+         if (this.RMCopy_Name (pJSONObject, Payload.pName) &&
                this.RMCopy_Type ({ pType: { bType: 1, bSubtype: 0, bFiction: 0, bMovable: 0 } }, Payload.pType) &&
                this.RMCopy_Owner ({ pOwner: { twRPersonaIx: 1 } }, Payload.pOwner) &&
                this.RMCopy_Resource ({ pResource: { qwResource: 0, sName: ''} }, pJSONObject, Payload.pResource) &&
@@ -545,7 +563,9 @@ class ExtractMap extends MV.MVMF.NOTIFICATION
 
             pIAction.Send (this, this.onRSPOpen.bind (this));
 
-            bResult = this.WaitForSingleObject ();
+            await this.WaitForSingleObject (this.CheckPending.bind (this), 500);
+
+            pRMPObject = this.#pRMXPending;
          }
          else
          {
@@ -560,7 +580,7 @@ class ExtractMap extends MV.MVMF.NOTIFICATION
 
          for (let i=0; i < pJSONObject.aChildren.length; i++)
          {
-            bResult = this.UpdateRMPObject (pJSONObject.aChildren[i], pJSONObject.twObjectIx, mpRemovedNodes);
+            bResult = this.UpdateRMPObject (pJSONObject.aChildren[i], pRMPObject, mpRemovedNodes);
          }
       }
       else bResult = false;
@@ -575,7 +595,8 @@ class ExtractMap extends MV.MVMF.NOTIFICATION
 
    GetRemovedNodes (pJSONObject, pRMXObject, mpRemovedNodes)
    {
-      let apRMXObject, pJSONObjectX;
+      let apRMXObject = [];
+      let pJSONObjectX;
 
       pRMXObject.Child_Enum ('RMPObject', this, this.EnumNodes, apRMXObject);
 
@@ -596,7 +617,7 @@ class ExtractMap extends MV.MVMF.NOTIFICATION
          }
          else pJSONObjectX = null;
 
-         this.GetRemovedNodes (pJSONObjectX, aRMXObject_Children[n]);
+         this.GetRemovedNodes (pJSONObjectX, apRMXObject[n]);
       }
    }
 
@@ -609,12 +630,13 @@ class ExtractMap extends MV.MVMF.NOTIFICATION
       {
          let mpRemovedNodes = {};
 
-         this.GetRemovedNodes (pJSONObject, this.#pRMXRoot, mpRemovedNodes);
-         this.UpdateRMPObject (pJSONObject[0], this.#pRMXRoot, mpRemovedNodes);
+         this.GetRemovedNodes (pJSONObject[0], this.#pRMXRoot, mpRemovedNodes);
+         this.UpdateRMPObject (pJSONObject[0], this.#m_MapRMXItem[this.#m_wClass_Object + '-' + this.#m_twObjectIx], mpRemovedNodes);
 
-         for (let pRMPObject in mpRemovedNodes)
+         for (let twObjectIx in mpRemovedNodes)
          {
-            delete this.#m_MapRMXItem['73' + '-' + pRMPObject.twObjectIx];
+            let pRMPObject = this.#m_MapRMXItem['73' + '-' + twObjectIx];
+            delete this.#m_MapRMXItem['73' + '-' + twObjectIx];
             
             pRMPObject.Detach (this);
 
@@ -623,14 +645,10 @@ class ExtractMap extends MV.MVMF.NOTIFICATION
             let pIAction = pRMXObject_Parent.Request ('RMPOBJECT_CLOSE');
             let Payload = pIAction.pRequest;
 
-            if (pRMPObject.wClass_Parent == 73)
-               Payload.twRMPObjectIx_Close = pRMPObject.twObjectIx;
-            else
-               Payload.twRMPObjectIx       = pRMPObject.twObjectIx;
+            Payload.twRMPObjectIx_Close = pRMPObject.twObjectIx;
+            Payload.bDeleteAll             = 1;
 
-            Payload.bDeleteAll          = true;
-
-            pIAction.Send (this, Response);
+            pIAction.Send (this, this.onRSPGeneric);
          }
       }
       else
