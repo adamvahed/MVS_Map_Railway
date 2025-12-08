@@ -706,7 +706,7 @@ class ExtractMap extends MV.MVMF.NOTIFICATION
 
             this.GetRemovedNodes (pJSONObject[0], this.#pRMXRoot, mpRemovedNodes);
             this.UpdateRMPObject (pJSONObject[0], this.#m_MapRMXItem[this.#m_wClass_Object + '-' + this.#m_twObjectIx], mpRemovedNodes, true);
-            this.RemoveRMPObject (mpRemovedNodes, modal);
+            this.RemoveRMPObject (mpRemovedNodes);
          }
          else
          {
